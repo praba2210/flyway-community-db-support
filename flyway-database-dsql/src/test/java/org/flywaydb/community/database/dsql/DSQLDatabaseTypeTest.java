@@ -102,6 +102,16 @@ class DSQLDatabaseTypeTest {
     }
 
     @Test
+    void wrapsSqlScriptExecutorFactoryForAsyncIndexWait() {
+        // The SQL-script executor seam must return our wrapper so CREATE INDEX ASYNC waits.
+        // Base PostgreSQL builds the delegate factory lazily (no I/O until an executor is made),
+        // so null collaborators are fine for the type check.
+        org.flywaydb.core.internal.sqlscript.SqlScriptExecutorFactory factory =
+                databaseType.createSqlScriptExecutorFactory(null, null, null);
+        assertThat(factory).isInstanceOf(DSQLSqlScriptExecutorFactory.class);
+    }
+
+    @Test
     void maxRetryDelayConvertsSecondsToMillis() {
         // Guards the seconds->millis conversion: dropping the *1000 would make backoff 1000x too short.
         assertThat(DSQLDatabaseType.maxRetryDelayMillis(30)).isEqualTo(30_000L);

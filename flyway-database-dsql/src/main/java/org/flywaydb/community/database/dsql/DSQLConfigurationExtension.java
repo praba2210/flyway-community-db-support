@@ -22,11 +22,15 @@ package org.flywaydb.community.database.dsql;
 import org.flywaydb.core.extensibility.ConfigurationExtension;
 
 /**
- * Configuration for Aurora DSQL OCC retry behavior, under the {@code dsql} namespace.
+ * Configuration for Aurora DSQL behavior, under the {@code dsql} namespace.
  *
- * <p>On by default. Override via {@code flyway.dsql.occMaxRetries} /
+ * <p>OCC retry is on by default. Override via {@code flyway.dsql.occMaxRetries} /
  * {@code flyway.dsql.occMaxRetryDelaySeconds} (or the matching {@code FLYWAY_DSQL_*}
  * environment variables). Defaults mirror the Aurora DSQL EF Core adapter (6 retries, 30s cap).
+ *
+ * <p>Async index waiting is opt-in, off by default. Set
+ * {@code flyway.dsql.awaitAsyncIndexes=true} (or {@code FLYWAY_DSQL_AWAIT_ASYNC_INDEXES}) to
+ * block on {@code CREATE INDEX ASYNC} builds until they complete.
  *
  * <p>Must remain a pure JavaBean: Flyway deep-copies it via {@link #copy()} using Jackson.
  * Do not store computed / non-bean state here.
@@ -35,9 +39,11 @@ public class DSQLConfigurationExtension implements ConfigurationExtension {
 
     private static final String ENV_MAX_RETRIES = "FLYWAY_DSQL_OCC_MAX_RETRIES";
     private static final String ENV_MAX_RETRY_DELAY_SECONDS = "FLYWAY_DSQL_OCC_MAX_RETRY_DELAY_SECONDS";
+    private static final String ENV_AWAIT_ASYNC_INDEXES = "FLYWAY_DSQL_AWAIT_ASYNC_INDEXES";
 
     private int occMaxRetries = 6;
     private int occMaxRetryDelaySeconds = 30;
+    private boolean awaitAsyncIndexes = false;
 
     public int getOccMaxRetries() {
         return occMaxRetries;
@@ -55,6 +61,14 @@ public class DSQLConfigurationExtension implements ConfigurationExtension {
         this.occMaxRetryDelaySeconds = occMaxRetryDelaySeconds;
     }
 
+    public boolean isAwaitAsyncIndexes() {
+        return awaitAsyncIndexes;
+    }
+
+    public void setAwaitAsyncIndexes(boolean awaitAsyncIndexes) {
+        this.awaitAsyncIndexes = awaitAsyncIndexes;
+    }
+
     @Override
     public String getNamespace() {
         return "dsql";
@@ -67,6 +81,8 @@ public class DSQLConfigurationExtension implements ConfigurationExtension {
                 return "flyway.dsql.occMaxRetries";
             case ENV_MAX_RETRY_DELAY_SECONDS:
                 return "flyway.dsql.occMaxRetryDelaySeconds";
+            case ENV_AWAIT_ASYNC_INDEXES:
+                return "flyway.dsql.awaitAsyncIndexes";
             default:
                 return null;
         }

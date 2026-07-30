@@ -22,6 +22,7 @@ package org.flywaydb.community.database.dsql;
 import org.flywaydb.community.database.DSQLDatabaseExtension;
 import org.flywaydb.core.api.ResourceProvider;
 import org.flywaydb.core.api.configuration.Configuration;
+import org.flywaydb.core.internal.callback.CallbackExecutor;
 import org.flywaydb.core.internal.database.base.CommunityDatabaseType;
 import org.flywaydb.core.internal.database.base.Database;
 import org.flywaydb.core.internal.jdbc.ExecutionTemplate;
@@ -29,6 +30,7 @@ import org.flywaydb.core.internal.jdbc.JdbcConnectionFactory;
 import org.flywaydb.core.internal.jdbc.StatementInterceptor;
 import org.flywaydb.core.internal.parser.Parser;
 import org.flywaydb.core.internal.parser.ParsingContext;
+import org.flywaydb.core.internal.sqlscript.SqlScriptExecutorFactory;
 import org.flywaydb.database.postgresql.PostgreSQLDatabaseType;
 import software.amazon.dsql.jdbc.OCCRetryConfig;
 
@@ -168,6 +170,23 @@ public class DSQLDatabaseType extends PostgreSQLDatabaseType implements Communit
         // degrades gracefully instead of failing the migration.
         int maxRetries = Math.min(100, Math.max(0, ext.getOccMaxRetries()));
         return new int[]{maxRetries, ext.getOccMaxRetryDelaySeconds()};
+    }
+
+    /**
+     * Wraps the base SQL-script executor factory so that, when {@code flyway.dsql.awaitAsyncIndexes}
+     * is enabled, a migration's {@code CREATE INDEX ASYNC} blocks until the index build completes.
+     * DSQL builds indexes in the background and returns a runtime {@code job_id}; static SQL cannot
+     * thread that id into {@code sys.wait_for_job}, so the wait is issued here. Off by default. See
+     * {@link DSQLSqlScriptExecutor}.
+     */
+    @Override
+    public SqlScriptExecutorFactory createSqlScriptExecutorFactory(
+            JdbcConnectionFactory jdbcConnectionFactory,
+            CallbackExecutor callbackExecutor,
+            StatementInterceptor statementInterceptor) {
+        SqlScriptExecutorFactory delegate = super.createSqlScriptExecutorFactory(
+                jdbcConnectionFactory, callbackExecutor, statementInterceptor);
+        return new DSQLSqlScriptExecutorFactory(delegate);
     }
 
     @Override

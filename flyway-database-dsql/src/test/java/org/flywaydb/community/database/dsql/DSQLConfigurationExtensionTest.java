@@ -40,11 +40,18 @@ class DSQLConfigurationExtensionTest {
     }
 
     @Test
+    void awaitAsyncIndexesDefaultsToFalse() {
+        assertThat(ext.isAwaitAsyncIndexes()).isFalse();
+    }
+
+    @Test
     void settersRoundTrip() {
         ext.setOccMaxRetries(2);
         ext.setOccMaxRetryDelaySeconds(10);
+        ext.setAwaitAsyncIndexes(true);
         assertThat(ext.getOccMaxRetries()).isEqualTo(2);
         assertThat(ext.getOccMaxRetryDelaySeconds()).isEqualTo(10);
+        assertThat(ext.isAwaitAsyncIndexes()).isTrue();
     }
 
     @Test
@@ -53,6 +60,8 @@ class DSQLConfigurationExtensionTest {
                 .isEqualTo("flyway.dsql.occMaxRetries");
         assertThat(ext.getConfigurationParameterFromEnvironmentVariable("FLYWAY_DSQL_OCC_MAX_RETRY_DELAY_SECONDS"))
                 .isEqualTo("flyway.dsql.occMaxRetryDelaySeconds");
+        assertThat(ext.getConfigurationParameterFromEnvironmentVariable("FLYWAY_DSQL_AWAIT_ASYNC_INDEXES"))
+                .isEqualTo("flyway.dsql.awaitAsyncIndexes");
         assertThat(ext.getConfigurationParameterFromEnvironmentVariable("FLYWAY_DSQL_UNKNOWN")).isNull();
     }
 
@@ -67,16 +76,20 @@ class DSQLConfigurationExtensionTest {
                 .startsWith(prefix);
         assertThat(ext.getConfigurationParameterFromEnvironmentVariable("FLYWAY_DSQL_OCC_MAX_RETRY_DELAY_SECONDS"))
                 .startsWith(prefix);
+        assertThat(ext.getConfigurationParameterFromEnvironmentVariable("FLYWAY_DSQL_AWAIT_ASYNC_INDEXES"))
+                .startsWith(prefix);
     }
 
     @Test
     void copyPreservesValuesAndDoesNotThrow() {
         ext.setOccMaxRetries(4);
         ext.setOccMaxRetryDelaySeconds(15);
+        ext.setAwaitAsyncIndexes(true);
         ConfigurationExtension copy = (ConfigurationExtension) ext.copy();
         assertThat(copy).isInstanceOf(DSQLConfigurationExtension.class);
         DSQLConfigurationExtension c = (DSQLConfigurationExtension) copy;
         assertThat(c.getOccMaxRetries()).isEqualTo(4);
         assertThat(c.getOccMaxRetryDelaySeconds()).isEqualTo(15);
+        assertThat(c.isAwaitAsyncIndexes()).isTrue();
     }
 }

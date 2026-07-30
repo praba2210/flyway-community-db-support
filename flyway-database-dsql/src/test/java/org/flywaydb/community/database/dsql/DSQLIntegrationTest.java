@@ -21,6 +21,7 @@ package org.flywaydb.community.database.dsql;
 
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
+import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.flywaydb.core.api.migration.Context;
 import org.flywaydb.core.api.migration.JavaMigration;
 import org.flywaydb.core.api.output.MigrateResult;
@@ -41,6 +42,7 @@ import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * End-to-end live-cluster test for the Aurora DSQL OCC retry.
@@ -153,6 +155,111 @@ class DSQLIntegrationTest {
         // commit, orphaning the first attempt's row. DSQLConnection reconciles it, so exactly one
         // successful history row must remain for the version (not two).
         assertThat(successfulRowCount("1")).isEqualTo(1);
+    }
+
+    @Test
+    void migrateWaitsForAsyncIndexBuild() throws Exception {
+        // Populate a table large enough that CREATE INDEX ASYNC lags the statement, then run a
+        // SQL migration that creates the index ASYNC. If the wait fires, the index is fully built
+        // (not 'building') the moment migrate() returns. This check is timing-dependent — a build
+        // fast enough to finish before the status read would pass even without the wait; the
+        // deterministic proof that the wait blocks and inspects the result is
+        // migrateFailsWhenAsyncIndexBuildFails, which can only fail the migration if it does.
+        String idxTable = SCHEMA + ".async_idx_e2e";
+        int rows = 60000;
+        int batch = 2500;   // DSQL caps mutations at 3,000 rows per transaction; stay under it.
+        try (Connection c = open(); Statement s = c.createStatement()) {
+            c.setAutoCommit(true);
+            s.execute("DROP TABLE IF EXISTS " + idxTable);
+            s.execute("CREATE TABLE " + idxTable + " (id int PRIMARY KEY, val int)");
+            for (int start = 1; start <= rows; start += batch) {
+                int end = Math.min(start + batch - 1, rows);
+                s.execute("INSERT INTO " + idxTable
+                        + " SELECT g, g FROM generate_series(" + start + ", " + end + ") g");
+            }
+        }
+
+        try {
+            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("dsql-async-idx");
+            // Leading comment on the statement exercises comment-stripping: the wait must still
+            // recognize CREATE INDEX ASYNC and block on the build (Flyway keeps the comment in
+            // Result.sql()).
+            java.nio.file.Files.writeString(dir.resolve("V1__create_async_index.sql"),
+                    "-- build the value index\n"
+                            + "CREATE INDEX ASYNC async_idx_e2e_val ON " + idxTable + " (val);\n");
+
+            FluentConfiguration config = Flyway.configure()
+                    .dataSource(jdbcUrl(), user(), null)
+                    .schemas(SCHEMA)
+                    .baselineOnMigrate(true)
+                    .baselineVersion("0")
+                    .locations("filesystem:" + dir.toAbsolutePath());
+            // The wait is opt-in; enable it so the migration blocks until the build completes.
+            config.getPluginRegister().getPlugin(DSQLConfigurationExtension.class)
+                    .setAwaitAsyncIndexes(true);
+            Flyway flyway = config.load();
+
+            MigrateResult result = flyway.migrate();
+            assertThat(result.success).isTrue();
+            assertThat(result.migrationsExecuted).isEqualTo(1);
+
+            // The index must be present and no longer building the instant migrate() returned.
+            // object_name is schema-qualified (e.g. flyway_dsql_test.async_idx_e2e_val), so match
+            // the qualified name built from SCHEMA rather than the bare index name.
+            try (Connection c = open(); Statement s = c.createStatement();
+                 ResultSet rs = s.executeQuery(
+                         "SELECT status FROM sys.jobs WHERE object_name = '"
+                                 + SCHEMA + ".async_idx_e2e_val'")) {
+                // sys.jobs purges completed rows after ~30 min; either it is gone (completed+purged)
+                // or, if still listed, it must be 'completed' — never 'submitted'/'building'.
+                if (rs.next()) {
+                    assertThat(rs.getString(1)).isEqualTo("completed");
+                }
+            }
+        } finally {
+            try (Connection c = open(); Statement s = c.createStatement()) {
+                c.setAutoCommit(true);
+                s.execute("DROP TABLE IF EXISTS " + idxTable);
+            }
+        }
+    }
+
+    @Test
+    void migrateFailsWhenAsyncIndexBuildFails() throws Exception {
+        // Deterministic failure: a UNIQUE index over duplicate values cannot build, so
+        // sys.wait_for_job returns false and the wait must fail the migration. Unlike the success
+        // test this does not depend on build timing — the build is guaranteed to fail.
+        String idxTable = SCHEMA + ".async_idx_fail";
+        try (Connection c = open(); Statement s = c.createStatement()) {
+            c.setAutoCommit(true);
+            s.execute("DROP TABLE IF EXISTS " + idxTable);
+            s.execute("CREATE TABLE " + idxTable + " (id int PRIMARY KEY, val int)");
+            // Two rows sharing val = 1 make a UNIQUE index on val impossible.
+            s.execute("INSERT INTO " + idxTable + " (id, val) VALUES (1, 1), (2, 1)");
+        }
+
+        try {
+            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("dsql-async-idx-fail");
+            java.nio.file.Files.writeString(dir.resolve("V1__create_unique_async_index.sql"),
+                    "CREATE UNIQUE INDEX ASYNC async_idx_fail_val ON " + idxTable + " (val);\n");
+
+            FluentConfiguration config = Flyway.configure()
+                    .dataSource(jdbcUrl(), user(), null)
+                    .schemas(SCHEMA)
+                    .baselineOnMigrate(true)
+                    .baselineVersion("0")
+                    .locations("filesystem:" + dir.toAbsolutePath());
+            config.getPluginRegister().getPlugin(DSQLConfigurationExtension.class)
+                    .setAwaitAsyncIndexes(true);
+            Flyway flyway = config.load();
+
+            assertThatThrownBy(flyway::migrate).hasMessageContaining("async index build");
+        } finally {
+            try (Connection c = open(); Statement s = c.createStatement()) {
+                c.setAutoCommit(true);
+                s.execute("DROP TABLE IF EXISTS " + idxTable);
+            }
+        }
     }
 
     /**
